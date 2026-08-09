@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  clearStoredCosmoAddress,
+  clearStoredCosmoIdentity,
   readStoredCosmoAddress,
   readStoredCosmoUsername,
 } from "@/lib/cosmo-username-storage";
@@ -22,11 +22,13 @@ export function CollectionHomeRedirect({
 
   useEffect(() => {
     // The by-wallet resolver bounced us back here because the stored address
-    // no longer maps to a Cosmo nickname. Drop it, otherwise we'd redirect
-    // straight back and ping-pong forever.
-    if (walletUnresolved) clearStoredCosmoAddress();
+    // no longer maps to a Cosmo nickname — the usual cause being a rename.
+    // Drop the whole saved identity: keeping the username would just send us
+    // to its 404 (it was renamed away too), and keeping the address would
+    // ping-pong through the resolver forever.
+    if (walletUnresolved) clearStoredCosmoIdentity();
 
-    const savedAddress = walletUnresolved ? null : readStoredCosmoAddress();
+    const savedAddress = readStoredCosmoAddress();
     if (savedAddress) {
       router.replace(
         sectionHref(`/collection/by-wallet/${savedAddress}`, {

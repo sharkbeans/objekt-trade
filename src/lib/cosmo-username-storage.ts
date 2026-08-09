@@ -29,8 +29,15 @@ export function readStoredCosmoAddress(): string | null {
   return value && /^0x[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
 }
 
-export function clearStoredCosmoAddress(): void {
+// Drop the whole saved identity. Username and address are always written
+// together by storeCosmoUsername(), so they describe one Cosmo account and go
+// stale together — clearing only one half leaves the collection home
+// redirecting into the other half's dead end.
+export function clearStoredCosmoIdentity(): void {
   if (typeof window === "undefined") return;
+  for (const key of COSMO_USERNAME_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+  }
   localStorage.removeItem(COSMO_ADDRESS_STORAGE_KEY);
 }
 
