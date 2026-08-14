@@ -11,13 +11,14 @@ import { mirror } from "@/lib/db/indexer-mirror";
 import { collections } from "@/lib/db/indexer-schema";
 import { compareSeasons } from "@/lib/filter-options";
 import { membersByArtist } from "@/lib/filters";
+import {
+  getCollectionStats,
+  getCollectionTradability,
+  hasTradableCopy,
+} from "@/lib/progress/collection-stats";
 import { isCollectionProgressCountable } from "@/lib/progress/countable";
 import { getCachedProgressMemberResponse } from "@/lib/progress/member-response-cache";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import type {
   ProgressCollection,
   ProgressMemberResponse,
@@ -130,11 +131,7 @@ export async function GET(
         }
       }
 
-      const tradabilityById = await getCached(
-        `progress:tradability:v2:${member.toLowerCase()}:${allCollections.length}`,
-        10 * 60_000,
-        () => loadCollectionTradabilityByDbId(allCollections.map((c) => c.id)),
-      );
+      const snapshot = await getCollectionStats();
 
       // A/Z dedup: collectionNo like "101A" and "101Z" are the same physical
       // card. Group by (season, numeric prefix), preferring Z over A.
@@ -172,7 +169,7 @@ export async function GET(
       const artist = artistForMember(member);
       const result: ProgressCollection[] = deduped
         .map((c) => {
-          const tradability = tradabilityById.get(c.id);
+          const tradability = getCollectionTradability(snapshot, c.id);
           return {
             collectionId: c.collectionId,
             collectionNo: c.collectionNo,
@@ -187,12 +184,12 @@ export async function GET(
             artist,
             ownedCount: ownedMap.get(c.id) ?? 0,
             transferableCount: transferableMap.get(c.id) ?? 0,
-            globalTotalCount: tradability?.totalCount ?? 0,
-            globalTradableCount: tradability?.tradableCount ?? 0,
+            globalTotalCount: tradability.totalCount,
+            globalTradableCount: tradability.tradableCount,
             gridMintCount: 0,
             progressCountable:
               isCollectionProgressCountable(c) &&
-              hasGlobalTradableCopy(tradability),
+              hasTradableCopy(snapshot, c.id),
           };
         })
         .sort((a, b) => {

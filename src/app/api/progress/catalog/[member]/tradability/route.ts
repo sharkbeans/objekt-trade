@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import {
+  getCollectionStats,
+  getCollectionTradability,
+  hasTradableCopy,
+} from "@/lib/progress/collection-stats";
+import {
   getProgressMemberCatalog,
   isProgressMember,
 } from "@/lib/progress/member-catalog";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import type { ProgressMemberTradabilityResponse } from "@/lib/progress/types";
-import { getCachedStaleWhileRevalidate } from "@/lib/server-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -22,23 +22,20 @@ export async function GET(
   }
 
   const catalog = await getProgressMemberCatalog(member);
-  const tradabilityById = await getCachedStaleWhileRevalidate(
-    `progress:member-tradability:v1:${member.toLowerCase()}`,
-    10 * 60_000,
-    () =>
-      loadCollectionTradabilityByDbId(
-        catalog.collections.map((collection) => collection.collectionDbId),
-      ),
-  );
+  const snapshot = await getCollectionStats();
 
   const counts: ProgressMemberTradabilityResponse["counts"] = {};
   for (const collection of catalog.collections) {
-    const tradability = tradabilityById.get(collection.collectionDbId);
+    const tradability = getCollectionTradability(
+      snapshot,
+      collection.collectionDbId,
+    );
     counts[collection.collectionId] = {
-      globalTotalCount: tradability?.totalCount ?? 0,
-      globalTradableCount: tradability?.tradableCount ?? 0,
+      globalTotalCount: tradability.totalCount,
+      globalTradableCount: tradability.tradableCount,
       progressCountable:
-        collection.baseProgressCountable && hasGlobalTradableCopy(tradability),
+        collection.baseProgressCountable &&
+        hasTradableCopy(snapshot, collection.collectionDbId),
     };
   }
 

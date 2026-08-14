@@ -7,12 +7,13 @@ import { mirror } from "@/lib/db/indexer-mirror";
 import { collections } from "@/lib/db/indexer-schema";
 import { compareSeasons } from "@/lib/filter-options";
 import { membersByArtist } from "@/lib/filters";
+import {
+  getCollectionStats,
+  getCollectionTradability,
+  hasTradableCopy,
+} from "@/lib/progress/collection-stats";
 import { isCollectionProgressCountable } from "@/lib/progress/countable";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import { getCached } from "@/lib/server-cache";
 
 export { CosmoUnavailableError };
@@ -198,26 +199,19 @@ export async function loadMemberProgress(
   const progress = await loadBaseMemberProgress(nickname, member);
   if (!progress) return null;
 
-  const tradabilityById = await getCached(
-    `og:progress:tradability:v1:${member.toLowerCase()}`,
-    10 * 60_000,
-    () =>
-      loadCollectionTradabilityByDbId(
-        progress.collections.map((collection) => collection.id),
-      ),
-  );
+  const snapshot = await getCollectionStats();
 
   return {
     ...progress,
     collections: progress.collections.map(({ id, ...collection }) => {
-      const tradability = tradabilityById.get(id);
+      const tradability = getCollectionTradability(snapshot, id);
       return {
         ...collection,
-        globalTotalCount: tradability?.totalCount ?? 0,
-        globalTradableCount: tradability?.tradableCount ?? 0,
+        globalTotalCount: tradability.totalCount,
+        globalTradableCount: tradability.tradableCount,
         progressCountable:
           isCollectionProgressCountable(collection) &&
-          hasGlobalTradableCopy(tradability),
+          hasTradableCopy(snapshot, id),
       };
     }),
   };

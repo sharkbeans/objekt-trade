@@ -5,20 +5,16 @@ import {
   resolveNickname,
   validateNickname,
 } from "@/lib/cosmo/resolve-nickname";
-import { indexerPool } from "@/lib/db/indexer";
-import { COSMO_SPIN_ADDRESS } from "@/lib/indexer-constants";
+import { membersByArtist } from "@/lib/filters";
 import { loadCollectionMetadataByDbIds } from "@/lib/indexer-owned-objekts";
 import {
-  isCollectionProgressCountable,
-  PROGRESS_EXCLUDED_CLASS,
-  PROGRESS_EXCLUDED_COLLECTION_NO,
-} from "@/lib/progress/countable";
+  getCollectionStats,
+  hasTradableCopy,
+} from "@/lib/progress/collection-stats";
+import { isCollectionProgressCountable } from "@/lib/progress/countable";
+import { getProgressMemberCatalog } from "@/lib/progress/member-catalog";
 import { mergeProgressRollups } from "@/lib/progress/merge";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import { redis } from "@/lib/redis";
 import { decodeRouteParam } from "@/lib/route-params";
 import { getCachedStaleWhileRevalidate } from "@/lib/server-cache";
@@ -30,17 +26,8 @@ type TotalsRow = {
   member: string;
   class: string;
   season: string;
-  onOffline: "online" | "offline";
+  onOffline: string;
   total: number;
-};
-
-type ProgressTotalQueryRow = {
-  artist: string;
-  member: string;
-  class: string;
-  season: string;
-  on_offline: "online" | "offline";
-  total: string;
 };
 
 export async function GET(
@@ -93,55 +80,49 @@ export async function GET(
 
   const [totals, owned] = await Promise.all([
     getCachedStaleWhileRevalidate(
-      "progress:totals:v4",
+      "progress:totals:v5",
       10 * 60_000,
       async () => {
-        const res = await indexerPool.query<ProgressTotalQueryRow>(
-          `
-          select
-            c.artist,
-            c.member,
-            c.class,
-            c.season,
-            c.on_offline,
-            count(*)::text as total
-          from collection c
-          where lower(c.class) <> $1
-            and upper(c.collection_no) <> $2
-            and exists (
-              select 1
-              from objekt o
-              where o.collection_id = c.id
-                and o.transferable = true
-                and o.owner <> $3
-            )
-          group by
-            c.artist,
-            c.member,
-            c.class,
-            c.season,
-            c.on_offline
-        `,
-          [
-            PROGRESS_EXCLUDED_CLASS.toLowerCase(),
-            PROGRESS_EXCLUDED_COLLECTION_NO,
-            COSMO_SPIN_ADDRESS,
-          ],
+        const snapshot = await getCollectionStats();
+        const members = Object.values(membersByArtist).flat();
+        const catalogs = await Promise.all(
+          members.map((member) => getProgressMemberCatalog(member)),
         );
-        return res.rows.map(
-          (row): TotalsRow => ({
-            artist: row.artist,
-            member: row.member,
-            class: row.class,
-            season: row.season,
-            onOffline: row.on_offline,
-            total: Number(row.total),
-          }),
-        );
+
+        const totalsByKey = new Map<string, TotalsRow>();
+        for (const catalog of catalogs) {
+          for (const collection of catalog.collections) {
+            if (!collection.baseProgressCountable) continue;
+            if (!hasTradableCopy(snapshot, collection.collectionDbId)) continue;
+
+            const key = [
+              catalog.artist,
+              catalog.member,
+              collection.class,
+              collection.season,
+              collection.onOffline,
+            ].join("|");
+            const existing = totalsByKey.get(key);
+            if (existing) {
+              existing.total += 1;
+              continue;
+            }
+            totalsByKey.set(key, {
+              artist: catalog.artist,
+              member: catalog.member,
+              class: collection.class,
+              season: collection.season,
+              onOffline: collection.onOffline,
+              total: 1,
+            });
+          }
+        }
+
+        return [...totalsByKey.values()];
       },
     ),
     getCachedStaleWhileRevalidate(
-      `progress:owned-rollups:v6:${resolved.address}`,
+      `progress:owned-rollups:v7:${resolved.address}`,
       90_000,
       async () => {
         const ownedCounts = await getFreshOwnedCollectionCounts(
@@ -150,9 +131,9 @@ export async function GET(
         const ownedCollectionDbIds = ownedCounts.flatMap((row) =>
           row.collectionDbId ? [row.collectionDbId] : [],
         );
-        const [ownedCollections, tradabilityById] = await Promise.all([
+        const [ownedCollections, snapshot] = await Promise.all([
           loadCollectionMetadataByDbIds(ownedCollectionDbIds),
-          loadCollectionTradabilityByDbId(ownedCollectionDbIds),
+          getCollectionStats(),
         ]);
         const rollups = new Map<
           string,
@@ -168,7 +149,7 @@ export async function GET(
 
         for (const row of ownedCollections.values()) {
           if (!isCollectionProgressCountable(row)) continue;
-          if (!hasGlobalTradableCopy(tradabilityById.get(row.id))) continue;
+          if (!hasTradableCopy(snapshot, row.id)) continue;
 
           const key = [
             row.artist,
