@@ -31,6 +31,7 @@ import { EDITION_LABELS, type Edition } from "@/lib/edition";
 import {
   computeGriddable,
   computeOfferableDupes,
+  formatSlotSerial,
   getGridSlots,
 } from "@/lib/grid-progress";
 import {
@@ -310,7 +311,7 @@ export function GridTradeDialog({
                   )}
                   <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 pb-1 pt-3">
                     <p className="text-[10px] text-white font-medium leading-tight">
-                      {c.collectionNo}
+                      {formatSlotSerial(c.collectionNo)}
                     </p>
                   </div>
                   {isSelected && (

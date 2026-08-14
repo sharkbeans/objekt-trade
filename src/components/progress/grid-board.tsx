@@ -5,7 +5,11 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Edition } from "@/lib/edition";
 import { EDITION_LABELS } from "@/lib/edition";
-import { computeGriddable, getGridSlots } from "@/lib/grid-progress";
+import {
+  computeGriddable,
+  formatSlotSerial,
+  getGridSlots,
+} from "@/lib/grid-progress";
 import type { ProgressCollection } from "@/lib/progress/types";
 import { DexDetailDialog } from "./dex-detail-dialog";
 import { GridTradeDialog } from "./grid-trade-dialog";
@@ -38,25 +42,30 @@ function FirstCell({
     <button
       type="button"
       onClick={onOpen}
-      className="relative aspect-11/17 w-full overflow-hidden rounded"
+      className="flex w-full flex-col gap-1 text-left"
     >
-      {/* biome-ignore lint/performance/noImgElement: Indexer image URLs are already optimized card assets. */}
-      <img
-        src={collection.thumbnailImage}
-        alt={collection.collectionNo}
-        loading="lazy"
-        className="h-full w-full object-cover"
-      />
-      <div
-        className={`absolute inset-0 bg-black/71.5 transition-opacity duration-200 ${
-          ownershipLoaded && !owned ? "opacity-100" : "opacity-0"
-        }`}
-      />
-      {ownershipLoaded && owned && displayCount > 1 && (
-        <span className="absolute bottom-1 right-1 flex h-5.5 w-5.5 items-center justify-center rounded-full border-2 border-white/30 bg-black text-[11px] font-bold text-white leading-none">
-          {displayCount}
-        </span>
-      )}
+      <div className="relative aspect-11/17 w-full overflow-hidden rounded">
+        {/* biome-ignore lint/performance/noImgElement: Indexer image URLs are already optimized card assets. */}
+        <img
+          src={collection.thumbnailImage}
+          alt={collection.collectionNo}
+          loading="lazy"
+          className="h-full w-full object-cover"
+        />
+        <div
+          className={`absolute inset-0 bg-black/71.5 transition-opacity duration-200 ${
+            ownershipLoaded && !owned ? "opacity-100" : "opacity-0"
+          }`}
+        />
+        {ownershipLoaded && owned && displayCount > 1 && (
+          <span className="absolute bottom-1 right-1 flex h-5.5 w-5.5 items-center justify-center rounded-full border-2 border-white/30 bg-black text-[11px] font-bold text-white leading-none">
+            {displayCount}
+          </span>
+        )}
+      </div>
+      <p className="truncate text-center text-[10px] leading-tight text-muted-foreground">
+        {formatSlotSerial(collection.collectionNo)}
+      </p>
     </button>
   );
 }
@@ -92,25 +101,30 @@ function RewardCell({
     <button
       type="button"
       onClick={() => onOpen(current)}
-      className="relative aspect-11/17 w-full overflow-hidden rounded"
+      className="flex w-full flex-col gap-1 text-left"
     >
-      {pool.map((c, i) => (
-        // biome-ignore lint/performance/noImgElement: Indexer image URLs are already optimized card assets.
-        <img
-          key={c.collectionId}
-          src={c.thumbnailImage}
-          alt={c.collectionNo}
-          loading="lazy"
-          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ease-in-out ${
-            i === index ? "opacity-100" : "opacity-0"
+      <div className="relative aspect-11/17 w-full overflow-hidden rounded">
+        {pool.map((c, i) => (
+          // biome-ignore lint/performance/noImgElement: Indexer image URLs are already optimized card assets.
+          <img
+            key={c.collectionId}
+            src={c.thumbnailImage}
+            alt={c.collectionNo}
+            loading="lazy"
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ease-in-out ${
+              i === index ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        ))}
+        <div
+          className={`absolute inset-0 bg-black/71.5 transition-opacity duration-700 ease-in-out ${
+            !ownershipLoaded || owned ? "opacity-0" : "opacity-100"
           }`}
         />
-      ))}
-      <div
-        className={`absolute inset-0 bg-black/71.5 transition-opacity duration-700 ease-in-out ${
-          !ownershipLoaded || owned ? "opacity-0" : "opacity-100"
-        }`}
-      />
+      </div>
+      <p className="truncate text-center text-[10px] leading-tight text-muted-foreground">
+        {formatSlotSerial(current.collectionNo)}
+      </p>
     </button>
   );
 }

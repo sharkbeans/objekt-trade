@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDownIcon,
+  InfoIcon,
   LayoutGridIcon,
   Loader2Icon,
   ShareIcon,
@@ -34,6 +35,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useProgressOverview } from "@/hooks/use-progress-overview";
 import { shareOrDownloadCanvas } from "@/lib/download-canvas";
 import {
@@ -1234,9 +1241,32 @@ export function MemberDexContent({
             longWait
           />
         ) : displayTotals ? (
-          <p className="text-muted-foreground">
-            {displayTotals.owned}/{displayTotals.total} collected
-          </p>
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <span>
+              {displayTotals.owned}/{displayTotals.total} collected
+            </span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <InfoIcon className="h-5 w-5 shrink-0 text-muted-foreground outline-none" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-72 text-xs">
+                  <p className="font-md">Counted</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    <li>Collections with a tradable copy in circulation</li>
+                  </ul>
+                  <p className="mt-2 font-md">Not counted</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    <li>Welcome Class Objekts (WCO)</li>
+                    <li>
+                      Objekts with no tradable copy anywhere
+                      rewards that never entered circulation
+                    </li>
+                  </ul>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ) : null}
       </div>
 

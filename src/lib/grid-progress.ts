@@ -36,6 +36,12 @@ export function getGridSlots(edition: number) {
   return edition === 3 ? DIAMOND_GRID_SLOTS : FULL_GRID_SLOTS;
 }
 
+// FCO collectionNo carries a trailing A/Z variant letter (e.g. "101Z") that's
+// meaningless to a user picking a slot — strip it for display.
+export function formatSlotSerial(collectionNo: string): string {
+  return collectionNo.replace(/[A-Za-z]$/, "");
+}
+
 type OfferableInput = {
   collectionId: string;
   collectionNo: string;
