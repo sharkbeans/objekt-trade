@@ -7,12 +7,14 @@ import { mirror } from "@/lib/db/indexer-mirror";
 import { collections } from "@/lib/db/indexer-schema";
 import { compareSeasons } from "@/lib/filter-options";
 import { membersByArtist } from "@/lib/filters";
+import { groupAzVariants } from "@/lib/progress/az-groups";
+import {
+  getCollectionStats,
+  getGroupCollectionTradability,
+  hasTradableCopyInGroup,
+} from "@/lib/progress/collection-stats";
 import { isCollectionProgressCountable } from "@/lib/progress/countable";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import { getCached } from "@/lib/server-cache";
 
 export { CosmoUnavailableError };
@@ -55,6 +57,8 @@ export type GridMemberProgress = {
 
 type BaseMemberProgressCollection = GridMemberProgressCollection & {
   id: string;
+  /** Every A/Z twin folded into this entry — see az-groups.ts. */
+  variantIds: string[];
 };
 
 /**
@@ -110,51 +114,25 @@ async function loadBaseMemberProgress(
     if (row.collectionDbId) ownedMap.set(row.collectionDbId, row.ownedCount);
   }
 
-  // A/Z dedup: collectionNo like "101A" and "101Z" are the same physical
-  // card. Group by (season, numeric prefix); prefer Z, fall back to A.
-  // Mirrors /api/progress/[nickname]/[member]/route.ts's own dedup so the
-  // OG image's totals match what the page shows.
-  type RawCollection = (typeof allCollections)[number];
-  const azGroups = new Map<
-    string,
-    { a?: RawCollection; z?: RawCollection; other?: RawCollection }
-  >();
-  for (const c of allCollections) {
-    const noUpper = c.collectionNo.toUpperCase();
-    if (noUpper.endsWith("A") || noUpper.endsWith("Z")) {
-      const base = `${c.season}::${noUpper.slice(0, -1)}`;
-      const entry = azGroups.get(base) ?? {};
-      if (noUpper.endsWith("Z")) entry.z = c;
-      else entry.a = c;
-      azGroups.set(base, entry);
-    } else {
-      const base = `${c.season}::${noUpper}`;
-      const entry = azGroups.get(base) ?? {};
-      entry.other = c;
-      azGroups.set(base, entry);
-    }
-  }
-
-  const deduped: RawCollection[] = [];
-  for (const entry of azGroups.values()) {
-    if (entry.other) {
-      deduped.push(entry.other);
-    } else {
-      const pick = entry.z ?? entry.a;
-      if (pick) deduped.push(pick);
-    }
-  }
-
-  const result: BaseMemberProgressCollection[] = deduped
-    .map((c) => ({
-      id: c.id,
-      collectionNo: c.collectionNo,
-      season: c.season,
-      class: c.class,
-      onOffline: c.onOffline,
-      thumbnailImage: c.thumbnailImage,
-      ownedCount: ownedMap.get(c.id) ?? 0,
-    }))
+  // A/Z folding mirrors /api/progress/[nickname]/[member]/route.ts so the OG
+  // image's totals match what the page shows.
+  const result: BaseMemberProgressCollection[] = groupAzVariants(allCollections)
+    .map(({ representative: c, variants }) => {
+      const variantIds = variants.map((variant) => variant.id);
+      return {
+        id: c.id,
+        variantIds,
+        collectionNo: c.collectionNo,
+        season: c.season,
+        class: c.class,
+        onOffline: c.onOffline,
+        thumbnailImage: c.thumbnailImage,
+        ownedCount: variantIds.reduce(
+          (sum, id) => sum + (ownedMap.get(id) ?? 0),
+          0,
+        ),
+      };
+    })
     .sort((a, b) => {
       const sc = compareSeasons(a.season, b.season);
       if (sc !== 0) return sc;
@@ -186,7 +164,7 @@ export async function loadGridMemberProgress(
   return {
     ...progress,
     collections: progress.collections.map(
-      ({ id: _id, ...collection }) => collection,
+      ({ id: _id, variantIds: _variantIds, ...collection }) => collection,
     ),
   };
 }
@@ -198,27 +176,22 @@ export async function loadMemberProgress(
   const progress = await loadBaseMemberProgress(nickname, member);
   if (!progress) return null;
 
-  const tradabilityById = await getCached(
-    `og:progress:tradability:v1:${member.toLowerCase()}`,
-    10 * 60_000,
-    () =>
-      loadCollectionTradabilityByDbId(
-        progress.collections.map((collection) => collection.id),
-      ),
-  );
+  const snapshot = await getCollectionStats();
 
   return {
     ...progress,
-    collections: progress.collections.map(({ id, ...collection }) => {
-      const tradability = tradabilityById.get(id);
-      return {
-        ...collection,
-        globalTotalCount: tradability?.totalCount ?? 0,
-        globalTradableCount: tradability?.tradableCount ?? 0,
-        progressCountable:
-          isCollectionProgressCountable(collection) &&
-          hasGlobalTradableCopy(tradability),
-      };
-    }),
+    collections: progress.collections.map(
+      ({ id: _id, variantIds, ...collection }) => {
+        const tradability = getGroupCollectionTradability(snapshot, variantIds);
+        return {
+          ...collection,
+          globalTotalCount: tradability.totalCount,
+          globalTradableCount: tradability.tradableCount,
+          progressCountable:
+            isCollectionProgressCountable(collection) &&
+            hasTradableCopyInGroup(snapshot, variantIds),
+        };
+      },
+    ),
   };
 }

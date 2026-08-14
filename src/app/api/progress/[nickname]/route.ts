@@ -5,20 +5,14 @@ import {
   resolveNickname,
   validateNickname,
 } from "@/lib/cosmo/resolve-nickname";
-import { indexerPool } from "@/lib/db/indexer";
-import { COSMO_SPIN_ADDRESS } from "@/lib/indexer-constants";
-import { loadCollectionMetadataByDbIds } from "@/lib/indexer-owned-objekts";
+import { membersByArtist } from "@/lib/filters";
 import {
-  isCollectionProgressCountable,
-  PROGRESS_EXCLUDED_CLASS,
-  PROGRESS_EXCLUDED_COLLECTION_NO,
-} from "@/lib/progress/countable";
+  getCollectionStats,
+  hasTradableCopyInGroup,
+} from "@/lib/progress/collection-stats";
+import { getProgressMemberCatalog } from "@/lib/progress/member-catalog";
 import { mergeProgressRollups } from "@/lib/progress/merge";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import { redis } from "@/lib/redis";
 import { decodeRouteParam } from "@/lib/route-params";
 import { getCachedStaleWhileRevalidate } from "@/lib/server-cache";
@@ -30,18 +24,19 @@ type TotalsRow = {
   member: string;
   class: string;
   season: string;
-  onOffline: "online" | "offline";
+  onOffline: string;
   total: number;
 };
 
-type ProgressTotalQueryRow = {
-  artist: string;
-  member: string;
-  class: string;
-  season: string;
-  on_offline: "online" | "offline";
-  total: string;
-};
+type OwnedRow = Omit<TotalsRow, "total"> & { owned: number };
+
+// Both rollup sides must iterate the identical catalog groups, or owned and
+// total end up bucketed differently. Per-member catalogs are cached, so the
+// second caller in a request reuses the first one's load.
+function loadProgressCatalogs() {
+  const members = Object.values(membersByArtist).flat();
+  return Promise.all(members.map((member) => getProgressMemberCatalog(member)));
+}
 
 export async function GET(
   request: NextRequest,
@@ -93,103 +88,110 @@ export async function GET(
 
   const [totals, owned] = await Promise.all([
     getCachedStaleWhileRevalidate(
-      "progress:totals:v4",
+      "progress:totals:v6",
       10 * 60_000,
       async () => {
-        const res = await indexerPool.query<ProgressTotalQueryRow>(
-          `
-          select
-            c.artist,
-            c.member,
-            c.class,
-            c.season,
-            c.on_offline,
-            count(*)::text as total
-          from collection c
-          where lower(c.class) <> $1
-            and upper(c.collection_no) <> $2
-            and exists (
-              select 1
-              from objekt o
-              where o.collection_id = c.id
-                and o.transferable = true
-                and o.owner <> $3
-            )
-          group by
-            c.artist,
-            c.member,
-            c.class,
-            c.season,
-            c.on_offline
-        `,
-          [
-            PROGRESS_EXCLUDED_CLASS.toLowerCase(),
-            PROGRESS_EXCLUDED_COLLECTION_NO,
-            COSMO_SPIN_ADDRESS,
-          ],
-        );
-        return res.rows.map(
-          (row): TotalsRow => ({
-            artist: row.artist,
-            member: row.member,
-            class: row.class,
-            season: row.season,
-            onOffline: row.on_offline,
-            total: Number(row.total),
-          }),
-        );
+        const snapshot = await getCollectionStats();
+        const catalogs = await loadProgressCatalogs();
+
+        const totalsByKey = new Map<string, TotalsRow>();
+        for (const catalog of catalogs) {
+          for (const collection of catalog.collections) {
+            if (!collection.baseProgressCountable) continue;
+            if (
+              !hasTradableCopyInGroup(
+                snapshot,
+                collection.variantCollectionDbIds,
+              )
+            ) {
+              continue;
+            }
+
+            const key = [
+              catalog.artist,
+              catalog.member,
+              collection.class,
+              collection.season,
+              collection.onOffline,
+            ].join("|");
+            const existing = totalsByKey.get(key);
+            if (existing) {
+              existing.total += 1;
+              continue;
+            }
+            totalsByKey.set(key, {
+              artist: catalog.artist,
+              member: catalog.member,
+              class: collection.class,
+              season: collection.season,
+              onOffline: collection.onOffline,
+              total: 1,
+            });
+          }
+        }
+
+        return [...totalsByKey.values()];
       },
     ),
+    // Owned is walked over the same catalog groups as totals rather than over
+    // raw owned collection rows. Counting rows double-counted anyone holding
+    // both A/Z twins and filed the A under an `offline` bucket the deduped
+    // totals never create, so a whale could reach 535/500.
     getCachedStaleWhileRevalidate(
-      `progress:owned-rollups:v6:${resolved.address}`,
+      `progress:owned-rollups:v8:${resolved.address}`,
       90_000,
       async () => {
         const ownedCounts = await getFreshOwnedCollectionCounts(
           resolved.address,
         );
-        const ownedCollectionDbIds = ownedCounts.flatMap((row) =>
-          row.collectionDbId ? [row.collectionDbId] : [],
+        const ownedCollectionDbIds = new Set(
+          ownedCounts.flatMap((row) =>
+            row.collectionDbId ? [row.collectionDbId] : [],
+          ),
         );
-        const [ownedCollections, tradabilityById] = await Promise.all([
-          loadCollectionMetadataByDbIds(ownedCollectionDbIds),
-          loadCollectionTradabilityByDbId(ownedCollectionDbIds),
+        const [catalogs, snapshot] = await Promise.all([
+          loadProgressCatalogs(),
+          getCollectionStats(),
         ]);
-        const rollups = new Map<
-          string,
-          {
-            artist: string;
-            member: string;
-            class: string;
-            season: string;
-            onOffline: "online" | "offline";
-            owned: number;
-          }
-        >();
+        const rollups = new Map<string, OwnedRow>();
 
-        for (const row of ownedCollections.values()) {
-          if (!isCollectionProgressCountable(row)) continue;
-          if (!hasGlobalTradableCopy(tradabilityById.get(row.id))) continue;
+        for (const catalog of catalogs) {
+          for (const collection of catalog.collections) {
+            if (!collection.baseProgressCountable) continue;
+            if (
+              !hasTradableCopyInGroup(
+                snapshot,
+                collection.variantCollectionDbIds,
+              )
+            ) {
+              continue;
+            }
+            const ownsGroup = collection.variantCollectionDbIds.some((id) =>
+              ownedCollectionDbIds.has(id),
+            );
+            if (!ownsGroup) continue;
 
-          const key = [
-            row.artist,
-            row.member,
-            row.class,
-            row.season,
-            row.onOffline,
-          ].join("|");
-          const existing = rollups.get(key);
-          if (existing) {
-            existing.owned += 1;
-            continue;
+            const key = [
+              catalog.artist,
+              catalog.member,
+              collection.class,
+              collection.season,
+              collection.onOffline,
+            ].join("|");
+            const existing = rollups.get(key);
+            if (existing) {
+              existing.owned += 1;
+              continue;
+            }
+            rollups.set(key, {
+              artist: catalog.artist,
+              member: catalog.member,
+              class: collection.class,
+              season: collection.season,
+              onOffline: collection.onOffline,
+              owned: 1,
+            });
           }
-          rollups.set(key, {
-            artist: row.artist,
-            member: row.member,
-            class: row.class,
-            season: row.season,
-            onOffline: row.onOffline,
-            owned: 1,
-          });
         }
 
         return [...rollups.values()];

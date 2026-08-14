@@ -7,6 +7,7 @@ import {
   LayoutGridIcon,
   Loader2Icon,
   ShareIcon,
+  XIcon,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -307,6 +308,24 @@ function GridBoardSkeleton() {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function EmptyFilterState({ onReset }: { onReset: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-2 py-16 text-center">
+      <p className="text-sm text-muted-foreground">
+        No objekts to show. Try checking your filters.
+      </p>
+      <button
+        type="button"
+        onClick={onReset}
+        className="inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4 hover:text-muted-foreground"
+      >
+        <XIcon className="h-3.5 w-3.5" />
+        Reset Filters
+      </button>
     </div>
   );
 }
@@ -834,6 +853,30 @@ export function MemberDexContent({
     editionByCollectionId,
   ]);
 
+  // Whether the current Grid-tab filters leave any board renderable —
+  // GridSection only draws a board for editions that have a First-class
+  // collection, so a season/edition combo can be non-empty in gridGrouped
+  // yet still draw nothing (e.g. an edition with only Special copies).
+  const gridHasBoards = useMemo(() => {
+    for (const cols of gridGrouped.values()) {
+      if (cols.some((c) => c.class === "First")) return true;
+    }
+    return false;
+  }, [gridGrouped]);
+
+  const resetDexFilters = useCallback(() => {
+    setDexActiveClasses([]);
+    setDexActiveSeasons([]);
+    setDexActiveEditions([]);
+    setUnownedOnly(false);
+    setOwnedOnly(false);
+  }, []);
+
+  const resetGridFilters = useCallback(() => {
+    setGridActiveSeasons([]);
+    setGridActiveEditions([]);
+  }, []);
+
   // Header totals are always the member's full, unfiltered collection — they
   // shouldn't shift depending on which tab or filters are active.
   const totals = useMemo(() => {
@@ -1119,17 +1162,21 @@ export function MemberDexContent({
       </div>
 
       <div className="space-y-8">
-        {[...grouped.entries()].map(([season, cols]) => (
-          <SeasonSection
-            key={season}
-            season={season}
-            collections={cols}
-            perRow={perRow}
-            address={data.address}
-            ownershipLoaded={displayOwnershipLoaded}
-            tradabilityLoaded={tradabilityLoaded}
-          />
-        ))}
+        {grouped.size === 0 ? (
+          <EmptyFilterState onReset={resetDexFilters} />
+        ) : (
+          [...grouped.entries()].map(([season, cols]) => (
+            <SeasonSection
+              key={season}
+              season={season}
+              collections={cols}
+              perRow={perRow}
+              address={data.address}
+              ownershipLoaded={displayOwnershipLoaded}
+              tradabilityLoaded={tradabilityLoaded}
+            />
+          ))
+        )}
       </div>
     </div>
   );
@@ -1181,18 +1228,22 @@ export function MemberDexContent({
         </div>
         <div className="t-skel-content space-y-8">
           {gridMintData &&
-            [...gridGrouped.entries()].map(([season, cols]) => (
-              <GridSection
-                key={season}
-                member={member}
-                season={season}
-                collections={cols}
-                address={data.address}
-                nickname={data.nickname}
-                viewConsumed={viewConsumed}
-                ownershipLoaded={displayOwnershipLoaded}
-                tradabilityLoaded={tradabilityLoaded}
-              />
+            (gridHasBoards ? (
+              [...gridGrouped.entries()].map(([season, cols]) => (
+                <GridSection
+                  key={season}
+                  member={member}
+                  season={season}
+                  collections={cols}
+                  address={data.address}
+                  nickname={data.nickname}
+                  viewConsumed={viewConsumed}
+                  ownershipLoaded={displayOwnershipLoaded}
+                  tradabilityLoaded={tradabilityLoaded}
+                />
+              ))
+            ) : (
+              <EmptyFilterState onReset={resetGridFilters} />
             ))}
         </div>
       </div>

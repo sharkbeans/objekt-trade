@@ -4,6 +4,7 @@ import { mirror } from "@/lib/db/indexer-mirror";
 import { collections } from "@/lib/db/indexer-schema";
 import { compareSeasons } from "@/lib/filter-options";
 import { membersByArtist } from "@/lib/filters";
+import { groupAzVariants } from "@/lib/progress/az-groups";
 import { isCollectionProgressCountable } from "@/lib/progress/countable";
 import type {
   ProgressMemberCatalogInternalResponse,
@@ -28,7 +29,7 @@ export function getProgressMemberCatalog(
   member: string,
 ): Promise<ProgressMemberCatalogInternalResponse> {
   return getCached(
-    `progress:member-catalog:v1:${member.toLowerCase()}`,
+    `progress:member-catalog:v2:${member.toLowerCase()}`,
     10 * 60_000,
     async () => {
       const rows = await mirror
@@ -47,31 +48,14 @@ export function getProgressMemberCatalog(
         .from(collections)
         .where(eq(collections.member, member));
 
-      type RawCollection = (typeof rows)[number];
-      const azGroups = new Map<
-        string,
-        { a?: RawCollection; z?: RawCollection; other?: RawCollection }
-      >();
-      for (const collection of rows) {
-        const noUpper = collection.collectionNo.toUpperCase();
-        const base =
-          noUpper.endsWith("A") || noUpper.endsWith("Z")
-            ? `${collection.season}::${noUpper.slice(0, -1)}`
-            : `${collection.season}::${noUpper}`;
-        const entry = azGroups.get(base) ?? {};
-        if (noUpper.endsWith("Z")) entry.z = collection;
-        else if (noUpper.endsWith("A")) entry.a = collection;
-        else entry.other = collection;
-        azGroups.set(base, entry);
-      }
-
       const artist = artistForMember(member);
       const result: ProgressMemberCatalogInternalResponse["collections"] = [];
-      for (const entry of azGroups.values()) {
-        const collection = entry.other ?? entry.z ?? entry.a;
-        if (!collection) continue;
+      for (const { representative: collection, variants } of groupAzVariants(
+        rows,
+      )) {
         result.push({
           collectionDbId: collection.id,
+          variantCollectionDbIds: variants.map((variant) => variant.id),
           collectionId: collection.collectionId,
           collectionNo: collection.collectionNo,
           season: collection.season,
@@ -107,7 +91,11 @@ export function toPublicProgressMemberCatalog(
     member: catalog.member,
     artist: catalog.artist,
     collections: catalog.collections.map(
-      ({ collectionDbId: _collectionDbId, ...collection }) => collection,
+      ({
+        collectionDbId: _collectionDbId,
+        variantCollectionDbIds: _variantCollectionDbIds,
+        ...collection
+      }) => collection,
     ),
   };
 }

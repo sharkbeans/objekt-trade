@@ -84,14 +84,19 @@ export async function GET(
       ]),
   );
 
+  // Summed over the A/Z group: holding only the offline twin still counts as
+  // owning the card, and the representative alone would report zero.
   const counts: ProgressMemberOwnershipResponse["counts"] = {};
   for (const collection of catalog.collections) {
-    counts[collection.collectionId] = ownedByDbId.get(
-      collection.collectionDbId,
-    ) ?? {
-      ownedCount: 0,
-      transferableCount: 0,
-    };
+    let ownedCount = 0;
+    let transferableCount = 0;
+    for (const variantDbId of collection.variantCollectionDbIds) {
+      const owned = ownedByDbId.get(variantDbId);
+      if (!owned) continue;
+      ownedCount += owned.ownedCount;
+      transferableCount += owned.transferableCount;
+    }
+    counts[collection.collectionId] = { ownedCount, transferableCount };
   }
 
   return NextResponse.json({

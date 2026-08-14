@@ -341,6 +341,51 @@ export async function loadOwnedDistinctCollectionDbIds(address: string) {
   return uniqueCollectionDbIds(rows.map((row) => row.collectionDbId));
 }
 
+/**
+ * Expands a public collection id into every A/Z twin's public id. Progress
+ * counts fold both forms into one card (see lib/progress/az-groups.ts), so a
+ * drill-down must list serials from both or a card can read as owned with an
+ * empty serial table. Returns just the input id when the card has no twin.
+ */
+export async function expandAzGroupPublicCollectionIds(
+  collectionId: string,
+): Promise<string[]> {
+  const [row] = await mirror
+    .select({
+      member: collections.member,
+      season: collections.season,
+      collectionNo: collections.collectionNo,
+    })
+    .from(collections)
+    .where(eq(collections.collectionId, collectionId))
+    .limit(1);
+
+  const collectionNo = row?.collectionNo.toUpperCase();
+  if (!row || !collectionNo) return [collectionId];
+  if (!collectionNo.endsWith("A") && !collectionNo.endsWith("Z")) {
+    return [collectionId];
+  }
+  const base = collectionNo.slice(0, -1);
+
+  const twins = await mirror
+    .select({ collectionId: collections.collectionId })
+    .from(collections)
+    .where(
+      and(
+        eq(collections.member, row.member),
+        eq(collections.season, row.season),
+        inArray(sql`upper(${collections.collectionNo})`, [
+          `${base}A`,
+          `${base}Z`,
+        ]),
+      ),
+    );
+
+  return [
+    ...new Set([collectionId, ...twins.map((twin) => twin.collectionId)]),
+  ];
+}
+
 export async function loadOwnedObjektsForPublicCollectionIds(
   address: string,
   collectionIds: string[],

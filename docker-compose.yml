@@ -158,6 +158,9 @@ services:
   #   "*/2 * * * *" → /api/cron/sync-indexer          (every 2 min, syncs the
   #                   local collection mirror; no-ops until MIRROR_DATABASE_URL
   #                   is set)
+  #   "*/5 * * * *" → /api/cron/refresh-collection-stats (every 5 min,
+  #                   self-throttled to once per 30 min; rebuilds the shared
+  #                   collection-tradability sheet /api/progress/* reads)
   # The app's Dockerfile healthcheck marks it unhealthy after ~2.5 min of
   # /api/health failures, but Docker never restarts unhealthy containers on
   # its own. This watcher does, with a 30-min cooldown so a persistent remote
@@ -204,6 +207,7 @@ services:
         */10 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/check-trade-availability
         */2 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/refresh-cosmo-token
         */2 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/sync-indexer
+        */5 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/refresh-collection-stats
         EOF
         exec crond -f -l 2
 

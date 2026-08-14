@@ -77,6 +77,11 @@ export type ProgressMemberCatalogResponse = {
 
 export type ProgressCatalogCollectionWithDbId = ProgressCatalogCollection & {
   collectionDbId: string;
+  /**
+   * Every A/Z twin folded into this entry, representative included. Ownership
+   * and tradability must be summed across these — see az-groups.ts.
+   */
+  variantCollectionDbIds: string[];
 };
 
 export type ProgressMemberCatalogInternalResponse = Omit<

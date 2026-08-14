@@ -1,6 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth-server";
-import { loadOwnedObjektsForPublicCollectionIds } from "@/lib/indexer-owned-objekts";
+import {
+  expandAzGroupPublicCollectionIds,
+  loadOwnedObjektsForPublicCollectionIds,
+} from "@/lib/indexer-owned-objekts";
 import type { ProgressSerialsResponse } from "@/lib/progress/types";
 import { redis } from "@/lib/redis";
 import { getCached } from "@/lib/server-cache";
@@ -44,17 +47,24 @@ export async function GET(request: NextRequest) {
   }
 
   const rows = await getCached(
-    `progress:serials:v1:${address.toLowerCase()}:${collectionId}`,
+    `progress:serials:v2:${address.toLowerCase()}:${collectionId}`,
     60_000,
     async () => {
-      const ownedRows = await loadOwnedObjektsForPublicCollectionIds(address, [
-        collectionId,
-      ]);
-      return ownedRows.map((row) => ({
-        serial: row.serial,
-        objektId: row.objektId,
-        transferable: row.transferable,
-      }));
+      // Both A/Z twins, so the listed serials add up to the card's own
+      // owned count rather than the representative's share of it.
+      const groupCollectionIds =
+        await expandAzGroupPublicCollectionIds(collectionId);
+      const ownedRows = await loadOwnedObjektsForPublicCollectionIds(
+        address,
+        groupCollectionIds,
+      );
+      return ownedRows
+        .map((row) => ({
+          serial: row.serial,
+          objektId: row.objektId,
+          transferable: row.transferable,
+        }))
+        .sort((a, b) => a.serial - b.serial);
     },
   );
 

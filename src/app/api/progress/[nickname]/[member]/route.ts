@@ -11,13 +11,15 @@ import { mirror } from "@/lib/db/indexer-mirror";
 import { collections } from "@/lib/db/indexer-schema";
 import { compareSeasons } from "@/lib/filter-options";
 import { membersByArtist } from "@/lib/filters";
+import { groupAzVariants } from "@/lib/progress/az-groups";
+import {
+  getCollectionStats,
+  getGroupCollectionTradability,
+  hasTradableCopyInGroup,
+} from "@/lib/progress/collection-stats";
 import { isCollectionProgressCountable } from "@/lib/progress/countable";
 import { getCachedProgressMemberResponse } from "@/lib/progress/member-response-cache";
 import { getFreshOwnedCollectionCounts } from "@/lib/progress/owned-collection-counts";
-import {
-  hasGlobalTradableCopy,
-  loadCollectionTradabilityByDbId,
-} from "@/lib/progress/tradability";
 import type {
   ProgressCollection,
   ProgressMemberResponse,
@@ -130,49 +132,18 @@ export async function GET(
         }
       }
 
-      const tradabilityById = await getCached(
-        `progress:tradability:v2:${member.toLowerCase()}:${allCollections.length}`,
-        10 * 60_000,
-        () => loadCollectionTradabilityByDbId(allCollections.map((c) => c.id)),
-      );
-
-      // A/Z dedup: collectionNo like "101A" and "101Z" are the same physical
-      // card. Group by (season, numeric prefix), preferring Z over A.
-      type RawCollection = (typeof allCollections)[number];
-      const azGroups = new Map<
-        string,
-        { a?: RawCollection; z?: RawCollection; other?: RawCollection }
-      >();
-      for (const c of allCollections) {
-        const noUpper = c.collectionNo.toUpperCase();
-        if (noUpper.endsWith("A") || noUpper.endsWith("Z")) {
-          const base = `${c.season}::${noUpper.slice(0, -1)}`;
-          const entry = azGroups.get(base) ?? {};
-          if (noUpper.endsWith("Z")) entry.z = c;
-          else entry.a = c;
-          azGroups.set(base, entry);
-        } else {
-          const base = `${c.season}::${noUpper}`;
-          const entry = azGroups.get(base) ?? {};
-          entry.other = c;
-          azGroups.set(base, entry);
-        }
-      }
-
-      const deduped: RawCollection[] = [];
-      for (const entry of azGroups.values()) {
-        if (entry.other) {
-          deduped.push(entry.other);
-        } else {
-          const pick = entry.z ?? entry.a;
-          if (pick) deduped.push(pick);
-        }
-      }
+      const snapshot = await getCollectionStats();
 
       const artist = artistForMember(member);
-      const result: ProgressCollection[] = deduped
-        .map((c) => {
-          const tradability = tradabilityById.get(c.id);
+      const result: ProgressCollection[] = groupAzVariants(allCollections)
+        .map(({ representative: c, variants }) => {
+          // Owning either twin is owning the card, so every count folds over
+          // the whole group — the representative is identity only.
+          const variantIds = variants.map((variant) => variant.id);
+          const tradability = getGroupCollectionTradability(
+            snapshot,
+            variantIds,
+          );
           return {
             collectionId: c.collectionId,
             collectionNo: c.collectionNo,
@@ -185,14 +156,20 @@ export async function GET(
             accentColor: c.accentColor,
             member,
             artist,
-            ownedCount: ownedMap.get(c.id) ?? 0,
-            transferableCount: transferableMap.get(c.id) ?? 0,
-            globalTotalCount: tradability?.totalCount ?? 0,
-            globalTradableCount: tradability?.tradableCount ?? 0,
+            ownedCount: variantIds.reduce(
+              (sum, id) => sum + (ownedMap.get(id) ?? 0),
+              0,
+            ),
+            transferableCount: variantIds.reduce(
+              (sum, id) => sum + (transferableMap.get(id) ?? 0),
+              0,
+            ),
+            globalTotalCount: tradability.totalCount,
+            globalTradableCount: tradability.tradableCount,
             gridMintCount: 0,
             progressCountable:
               isCollectionProgressCountable(c) &&
-              hasGlobalTradableCopy(tradability),
+              hasTradableCopyInGroup(snapshot, variantIds),
           };
         })
         .sort((a, b) => {

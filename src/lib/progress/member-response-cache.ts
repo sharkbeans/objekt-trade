@@ -18,9 +18,9 @@ type PersistedMemberResponse = {
 function cacheKeys(address: string, member: string) {
   const suffix = `${address.toLowerCase()}:${member.toLowerCase()}`;
   return {
-    memory: `progress:member-response:v1:${suffix}`,
-    persisted: `progress:member-response:persisted:v1:${suffix}`,
-    refreshLock: `progress:member-response:refresh-lock:v1:${suffix}`,
+    memory: `progress:member-response:v2:${suffix}`,
+    persisted: `progress:member-response:persisted:v2:${suffix}`,
+    refreshLock: `progress:member-response:refresh-lock:v2:${suffix}`,
   };
 }
 
