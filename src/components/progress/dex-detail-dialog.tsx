@@ -44,6 +44,9 @@ function tradableValue(
   tradabilityLoaded: boolean,
 ) {
   if (!tradabilityLoaded) return "Loading…";
+  // -1 is the sentinel for "unknown" — the shared tradability sheet hasn't
+  // built yet, distinct from a real zero.
+  if (collection.globalTotalCount < 0) return "—";
   if (collection.globalTotalCount === 0) return "0.00% (0)";
 
   const percent =

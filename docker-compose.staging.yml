@@ -124,6 +124,7 @@ services:
         */15 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/prune-stale-haves
         */2 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/refresh-cosmo-token
         */2 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/sync-indexer
+        */5 * * * * wget -qO- --header="Authorization: Bearer $$CRON_SECRET" $$APP_URL/api/cron/refresh-collection-stats
         EOF
         exec crond -f -l 2
 
