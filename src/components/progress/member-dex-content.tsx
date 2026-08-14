@@ -1259,8 +1259,8 @@ export function MemberDexContent({
                   <ul className="mt-1 list-disc space-y-0.5 pl-4">
                     <li>Welcome Class Objekts (WCO)</li>
                     <li>
-                      Objekts with no tradable copy anywhere
-                      rewards that never entered circulation
+                      Objekts with no tradable copy anywhere rewards that never
+                      entered circulation
                     </li>
                   </ul>
                 </TooltipContent>
