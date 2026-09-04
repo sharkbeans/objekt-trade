@@ -6,6 +6,7 @@ import {
   sectionOrigin,
   subdomainsEnabled,
 } from "@/lib/sections";
+import { sitemapUrlForHost } from "@/lib/sitemap-entries";
 
 // robots.txt must differ per host once sections live on subdomains, and
 // MetadataRoute.Robots can't read the request host — so this is a plain
@@ -27,6 +28,7 @@ const TRADE_QUERY_PARAMS = [
 function robotsBody(
   rules: { allow: string[]; disallow: string[] },
   host: string,
+  sitemap: string,
 ) {
   const lines = [
     "# ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
@@ -59,7 +61,7 @@ function robotsBody(
   ];
   for (const path of rules.allow) lines.push(`Allow: ${path}`);
   for (const path of rules.disallow) lines.push(`Disallow: ${path}`);
-  lines.push("", `Host: ${host}`, "");
+  lines.push("", `Host: ${host}`, `Sitemap: ${sitemap}`, "");
   return lines.join("\n");
 }
 
@@ -101,7 +103,7 @@ export async function GET() {
 
   let body: string;
   if (!subdomainsEnabled()) {
-    body = robotsBody(LEGACY_RULES, rootUrl());
+    body = robotsBody(LEGACY_RULES, rootUrl(), sitemapUrlForHost(null));
   } else {
     const who = sectionForHostname(hostname);
     if (who === null || who === "root") {
@@ -113,9 +115,14 @@ export async function GET() {
           disallow: ["/api/", "/notifications", "/active-trades"],
         },
         rootUrl(),
+        sitemapUrlForHost("root"),
       );
     } else {
-      body = robotsBody(rulesForSection(who), sectionOrigin(who));
+      body = robotsBody(
+        rulesForSection(who),
+        sectionOrigin(who),
+        sitemapUrlForHost(who),
+      );
     }
   }
 

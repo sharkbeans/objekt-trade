@@ -1,24 +1,15 @@
-import { and, count, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth-server";
-import { fetchUserByNickname } from "@/lib/cosmo/client";
-import { refreshCosmoAccountIfStale } from "@/lib/cosmo/refresh-account";
-import { db } from "@/lib/db";
 import {
-  activeTrade,
-  cosmoAccount,
-  tradeBan,
-  tradePost,
-} from "@/lib/db/schema";
+  loadProfileStats,
+  resolveProfileIdentity,
+} from "@/lib/profile/profile-summary";
 import { decodeRouteParam } from "@/lib/route-params";
-import { getCached } from "@/lib/server-cache";
-
-function isWalletAddress(value: string): boolean {
-  return /^0x[0-9a-fA-F]{40}$/.test(value);
-}
 
 // GET /api/users/[address] — public user profile stats
-// Accepts: wallet address (0x...) or cosmo nickname (falls back to Cosmo API lookup)
+// Accepts: wallet address (0x...) or cosmo nickname (falls back to Cosmo API lookup).
+// The lookup and stats live in @/lib/profile/profile-summary so the profile
+// page's generateMetadata and OG image share one implementation with this route.
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ address: string }> },
@@ -28,163 +19,51 @@ export async function GET(
   const identifier = decodeRouteParam((await params).address);
   const session = await getSession();
 
-  const userColumns = {
-    id: true,
-    name: true,
-    image: true,
-    email: true,
-    discordId: true,
-    discordUsername: true,
-  } as const;
+  const result = await resolveProfileIdentity(identifier);
 
-  type CosmoRow = Awaited<
-    ReturnType<
-      typeof db.query.cosmoAccount.findFirst<{
-        with: { user: { columns: typeof userColumns } };
-      }>
-    >
-  >;
-  let cosmo: CosmoRow;
-
-  if (isWalletAddress(identifier)) {
-    // Direct address lookup
-    cosmo = await db.query.cosmoAccount.findFirst({
-      where: eq(cosmoAccount.address, identifier.toLowerCase()),
-      with: { user: { columns: userColumns } },
-    });
-    if (cosmo) cosmo = await refreshCosmoAccountIfStale(cosmo);
-    // If the user has a nickname, redirect to the prettier /@nickname URL
-    if (cosmo?.nickname) {
-      return NextResponse.json({ nickname: cosmo.nickname }, { status: 301 });
-    }
-  } else {
-    // Treat as nickname — try DB first (case-insensitive). Compared with
-    // lower() rather than ilike: "_" and "%" are LIKE wildcards and both are
-    // legal in a Cosmo nickname, so ilike would let "/@some_user" match a
-    // different account that happens to fit the pattern.
-    cosmo = await db.query.cosmoAccount.findFirst({
-      where: sql`lower(${cosmoAccount.nickname}) = lower(${identifier})`,
-      with: { user: { columns: userColumns } },
-    });
-
-    if (!cosmo) {
-      // Fall back to Cosmo API to resolve nickname → address
-      let resolved: { nickname: string; address: string } | null;
-      try {
-        resolved = await fetchUserByNickname(identifier);
-      } catch (error) {
-        console.error("Failed to resolve Cosmo user profile:", error);
-        return NextResponse.json(
-          { error: "Cosmo is temporarily unavailable. Try again later." },
-          { status: 503 },
-        );
-      }
-      if (!resolved) {
-        return NextResponse.json({ error: "User not found" }, { status: 404 });
-      }
-
-      return NextResponse.json({
-        linked: false,
-        address: resolved.address.toLowerCase(),
-        nickname: resolved.nickname,
-        image: null,
-        linkedAt: null,
-        email: null,
-        discordId: null,
-        discordUsername: null,
-        viewer: {
-          isOwner: false,
-          userId: null,
-        },
-        stats: {
-          completed: 0,
-          cancelled: 0,
-          defaulted: 0,
-          openPosts: 0,
-        },
-        banned: null,
-      });
-    }
-
-    // Nickname found in DB — revalidate in case it's stale, since the
-    // lookup above matches on the (possibly outdated) cached nickname.
-    cosmo = await refreshCosmoAccountIfStale(cosmo);
-    if (
-      cosmo.nickname &&
-      cosmo.nickname.toLowerCase() !== identifier.toLowerCase()
-    ) {
-      // Cosmo rename discovered — redirect to the canonical new nickname URL
-      return NextResponse.json({ nickname: cosmo.nickname }, { status: 301 });
-    }
-
-    // Nickname found in DB — already at canonical URL, proceed to profile
+  if (result.kind === "cosmo-unavailable") {
+    return NextResponse.json(
+      { error: "Cosmo is temporarily unavailable. Try again later." },
+      { status: 503 },
+    );
   }
 
-  if (!cosmo) {
+  if (result.kind === "not-found") {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
+  if (result.kind === "redirect") {
+    return NextResponse.json({ nickname: result.nickname }, { status: 301 });
+  }
+
+  if (result.kind === "unlinked") {
+    return NextResponse.json({
+      linked: false,
+      address: result.address,
+      nickname: result.nickname,
+      image: null,
+      linkedAt: null,
+      email: null,
+      discordId: null,
+      discordUsername: null,
+      viewer: {
+        isOwner: false,
+        userId: null,
+      },
+      stats: {
+        completed: 0,
+        cancelled: 0,
+        defaulted: 0,
+        openPosts: 0,
+      },
+      banned: null,
+    });
+  }
+
+  const { cosmo } = result;
   const userId = cosmo.userId;
   const isOwner = session?.user.id === userId;
-  const userTradeFilter = or(
-    eq(activeTrade.initiatorUserId, userId),
-    eq(activeTrade.recipientUserId, userId),
-  );
-
-  const {
-    completedCount,
-    cancelledCount,
-    openPostCount,
-    activeBan,
-    defaultedTrades,
-  } = await getCached(`user-profile-stats:${userId}`, 60_000, async () => {
-    const [
-      [{ value: completedCount }],
-      [{ value: cancelledCount }],
-      [{ value: openPostCount }],
-      activeBan,
-      defaultedTrades,
-    ] = await Promise.all([
-      db
-        .select({ value: count() })
-        .from(activeTrade)
-        .where(and(userTradeFilter, eq(activeTrade.status, "completed"))),
-      db
-        .select({ value: count() })
-        .from(activeTrade)
-        .where(and(userTradeFilter, eq(activeTrade.status, "cancelled"))),
-      db
-        .select({ value: count() })
-        .from(tradePost)
-        .where(and(eq(tradePost.userId, userId), eq(tradePost.status, "open"))),
-      db.query.tradeBan.findFirst({
-        where: and(eq(tradeBan.userId, userId), isNull(tradeBan.liftedAt)),
-        columns: { id: true, reason: true, createdAt: true },
-      }),
-      // Defaulted: cancelled after acceptance, user had unsent sides
-      db.query.activeTrade.findMany({
-        where: and(
-          userTradeFilter,
-          eq(activeTrade.status, "cancelled"),
-          isNotNull(activeTrade.acceptedAt),
-        ),
-        with: { sides: true },
-        columns: { id: true },
-        limit: 500,
-      }),
-    ]);
-    return {
-      completedCount,
-      cancelledCount,
-      openPostCount,
-      activeBan,
-      defaultedTrades,
-    };
-  });
-
-  const defaultedCount = defaultedTrades.filter((t) =>
-    t.sides.some((s) => s.userId === userId && s.status === "pending"),
-  ).length;
+  const { stats, banned } = await loadProfileStats(userId);
 
   return NextResponse.json({
     linked: true,
@@ -200,14 +79,7 @@ export async function GET(
       isOwner,
       userId: isOwner ? userId : null,
     },
-    stats: {
-      completed: completedCount,
-      cancelled: cancelledCount,
-      defaulted: defaultedCount,
-      openPosts: openPostCount,
-    },
-    banned: activeBan
-      ? { reason: activeBan.reason, since: activeBan.createdAt }
-      : null,
+    stats,
+    banned,
   });
 }
